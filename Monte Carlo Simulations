@@ -1,0 +1,351 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def clamp_value(x, min_val, max_val):
+    """Clamp x to the range [min_val, max_val]."""
+    return max(min_val, min(x, max_val))
+
+def weibull_survivorship(year, shape, scale):
+    """
+    Return Weibull-based survivorship at year t:
+        S(t) = exp(- (t / scale)^shape )
+    Ensures the result is in [0,1].
+    """
+    # Avoid division by zero if scale is extremely small
+    if scale <= 0:
+        return 0.0
+    s = np.exp(-((year / scale) ** shape))
+    return max(0.0, min(s, 1.0))
+
+def simulate_montecarlo(
+    # Simulation settings
+    initial_new_accounts=10000,  # new accounts at year 1
+    annual_new_accounts=20000*12,    # new accounts added each subsequent year
+    n_sims=10000,
+    n_years=5,
+
+    # Segment proportions
+    prop_high=0.20,
+    prop_med=0.50,
+    prop_low=0.30,
+
+    # Weibull shape & scale for High segment
+    shape_high_mean=1.5, shape_high_sd=0.3,
+    scale_high_mean=5.0, scale_high_sd=1.0,
+
+    # Weibull shape & scale for Medium segment
+    shape_med_mean=1.5, shape_med_sd=0.3,
+    scale_med_mean=5.0, scale_med_sd=1.0,
+
+    # Weibull shape & scale for Low segment
+    shape_low_mean=-1, shape_low_sd=0.3,
+    scale_low_mean=5.0, scale_low_sd=1.0,
+
+    # Interest (annual, mean, sd, clamp range)
+    interest_high_mean=150, interest_high_sd=15, interest_high_min=0, interest_high_max=999999,
+    interest_med_mean=80,   interest_med_sd=10,  interest_med_min=0,  interest_med_max=999999,
+    interest_low_mean=40,   interest_low_sd=5,   interest_low_min=0,  interest_low_max=999999,
+
+    # Fees (annual, mean, sd, clamp range)
+    fees_high_mean=10, fees_high_sd=3, fees_high_min=0, fees_high_max=999999,
+    fees_med_mean=30,  fees_med_sd=4, fees_med_min=0,   fees_med_max=999999,
+    fees_low_mean=50,  fees_low_sd=6, fees_low_min=0,   fees_low_max=999999,
+
+    # Interchange (annual, mean, sd, clamp range)
+    interchange_high_mean=20, interchange_high_sd=3, interchange_high_min=0, interchange_high_max=999999,
+    interchange_med_mean=15,  interchange_med_sd=2, interchange_med_min=0,   interchange_med_max=999999,
+    interchange_low_mean=5,   interchange_low_sd=1, interchange_low_min=0,   interchange_low_max=999999,
+
+    # Servicing cost (annual, mean, sd, clamp range)
+    servicing_high_mean=20, servicing_high_sd=3, servicing_high_min=0, servicing_high_max=999999,
+    servicing_med_mean=30,  servicing_med_sd=4, servicing_med_min=0,   servicing_med_max=999999,
+    servicing_low_mean=40,  servicing_low_sd=2, servicing_low_min=0,   servicing_low_max=999999,
+
+    # Random seed
+    random_seed=12345
+):
+    """
+    Runs a Monte Carlo simulation over n_sims iterations and n_years of projections,
+    each year adding new accounts to the surviving portfolio from prior years.
+    The survivorship each year is determined by a Weibull survival function:
+       S(t) = exp(-(t / scale)^shape)
+    with shape, scale drawn for each segment in each simulation.
+
+    Returns a DataFrame with columns:
+       sim, year, segment, accounts_survived, revenue, cost, net_profit
+    """
+    np.random.seed(random_seed)
+
+    # Pre-calculate initial segment distribution for Year 1
+    high_cnt_init = initial_new_accounts * prop_high
+    med_cnt_init  = initial_new_accounts * prop_med
+    low_cnt_init  = initial_new_accounts * prop_low
+
+    results = []
+
+    for sim in range(1, n_sims + 1):
+        #----------------------------------------------------------------------
+        # 1. Draw Weibull shape/scale for each segment in THIS simulation
+        #----------------------------------------------------------------------
+        shape_high = clamp_value(
+            np.random.normal(shape_high_mean, shape_high_sd),
+            0.01, 1000.0  # clamp to avoid zero or negative shape
+        )
+        scale_high = clamp_value(
+            np.random.normal(scale_high_mean, scale_high_sd),
+            0.01, 10000.0
+        )
+
+        shape_med = clamp_value(
+            np.random.normal(shape_med_mean, shape_med_sd),
+            0.01, 1000.0
+        )
+        scale_med = clamp_value(
+            np.random.normal(scale_med_mean, scale_med_sd),
+            0.01, 10000.0
+        )
+
+        shape_low = clamp_value(
+            np.random.normal(shape_low_mean, shape_low_sd),
+            0.01, 1000.0
+        )
+        scale_low = clamp_value(
+            np.random.normal(scale_low_mean, scale_low_sd),
+            0.01, 10000.0
+        )
+
+        #----------------------------------------------------------------------
+        # 2. Draw annual revenue/cost parameters for this simulation
+        # (They remain constant for all years in this simulation,
+        #  but could be re-drawn each year if desired.)
+        #----------------------------------------------------------------------
+
+        # interest
+        interest_high = clamp_value(
+            np.random.normal(interest_high_mean, interest_high_sd),
+            interest_high_min, interest_high_max
+        )
+        interest_med = clamp_value(
+            np.random.normal(interest_med_mean, interest_med_sd),
+            interest_med_min, interest_med_max
+        )
+        interest_low = clamp_value(
+            np.random.normal(interest_low_mean, interest_low_sd),
+            interest_low_min, interest_low_max
+        )
+
+        # fees
+        fees_high_val = clamp_value(
+            np.random.normal(fees_high_mean, fees_high_sd),
+            fees_high_min, fees_high_max
+        )
+        fees_med_val = clamp_value(
+            np.random.normal(fees_med_mean, fees_med_sd),
+            fees_med_min, fees_med_max
+        )
+        fees_low_val = clamp_value(
+            np.random.normal(fees_low_mean, fees_low_sd),
+            fees_low_min, fees_low_max
+        )
+
+        # interchange
+        interchange_high_val = clamp_value(
+            np.random.normal(interchange_high_mean, interchange_high_sd),
+            interchange_high_min, interchange_high_max
+        )
+        interchange_med_val = clamp_value(
+            np.random.normal(interchange_med_mean, interchange_med_sd),
+            interchange_med_min, interchange_med_max
+        )
+        interchange_low_val = clamp_value(
+            np.random.normal(interchange_low_mean, interchange_low_sd),
+            interchange_low_min, interchange_low_max
+        )
+
+        # servicing cost
+        servicing_high_val = clamp_value(
+            np.random.normal(servicing_high_mean, servicing_high_sd),
+            servicing_high_min, servicing_high_max
+        )
+        servicing_med_val = clamp_value(
+            np.random.normal(servicing_med_mean, servicing_med_sd),
+            servicing_med_min, servicing_med_max
+        )
+        servicing_low_val = clamp_value(
+            np.random.normal(servicing_low_mean, servicing_low_sd),
+            servicing_low_min, servicing_low_max
+        )
+
+        #----------------------------------------------------------------------
+        # 3. Year-by-year loop
+        #----------------------------------------------------------------------
+
+        # Start with the initial cohort in Year 1
+        high_cnt_prev = high_cnt_init
+        med_cnt_prev  = med_cnt_init
+        low_cnt_prev  = low_cnt_init
+
+        for year in range(1, n_years + 1):
+            # A) Surviving portion from prior year using Weibull S(t)
+            surv_high = weibull_survivorship(year, shape_high, scale_high)
+            surv_med  = weibull_survivorship(year, shape_med,  scale_med)
+            surv_low  = weibull_survivorship(year, shape_low,  scale_low)
+
+            high_cnt_curr = high_cnt_prev * surv_high
+            med_cnt_curr  = med_cnt_prev  * surv_med
+            low_cnt_curr  = low_cnt_prev  * surv_low
+
+            # B) Add new accounts for this year (except in year=1, where we already used initial_new_accounts)
+            if year > 1:
+                high_cnt_curr += annual_new_accounts * prop_high
+                med_cnt_curr  += annual_new_accounts * prop_med
+                low_cnt_curr  += annual_new_accounts * prop_low
+
+            # C) Calculate revenue
+            revenue_high = high_cnt_curr * (interest_high + fees_high_val + interchange_high_val)
+            revenue_med  = med_cnt_curr  * (interest_med  + fees_med_val  + interchange_med_val)
+            revenue_low  = low_cnt_curr  * (interest_low  + fees_low_val  + interchange_low_val)
+
+            # D) Calculate servicing cost
+            cost_high = high_cnt_curr * servicing_high_val
+            cost_med  = med_cnt_curr  * servicing_med_val
+            cost_low  = low_cnt_curr  * servicing_low_val
+
+            # E) Net Profit
+            net_high = revenue_high - cost_high
+            net_med  = revenue_med  - cost_med
+            net_low  = revenue_low  - cost_low
+
+            # F) Record results
+            results.append({
+                'sim': sim,
+                'year': year,
+                'segment': 'High',
+                'accounts_survived': high_cnt_curr,
+                'revenue': revenue_high,
+                'cost': cost_high,
+                'net_profit': net_high
+            })
+            results.append({
+                'sim': sim,
+                'year': year,
+                'segment': 'Medium',
+                'accounts_survived': med_cnt_curr,
+                'revenue': revenue_med,
+                'cost': cost_med,
+                'net_profit': net_med
+            })
+            results.append({
+                'sim': sim,
+                'year': year,
+                'segment': 'Low',
+                'accounts_survived': low_cnt_curr,
+                'revenue': revenue_low,
+                'cost': cost_low,
+                'net_profit': net_low
+            })
+
+            # G) Prepare for next iteration
+            high_cnt_prev = high_cnt_curr
+            med_cnt_prev  = med_cnt_curr
+            low_cnt_prev  = low_cnt_curr
+
+    # Convert our list of dicts into a DataFrame
+    df = pd.DataFrame(results)
+    return df
+
+def visualize_performance_by_segment(df):
+    """
+    Create example visualizations (using seaborn & matplotlib)
+    to assess performance by segment over the simulation years:
+      1) Line plot of average net profit
+      2) Line plot of average accounts
+      3) Box plot of net profit distribution
+      4) Line plot of average cost
+      5) Box plot of cost distribution
+    """
+
+    # 1) Compute summary stats for each (year, segment) across all simulations
+    df_summary = (
+        df.groupby(["year", "segment"], as_index=False)
+        .agg(
+            avg_net_profit=("net_profit", "mean"),
+            std_net_profit=("net_profit", "std"),
+            avg_accounts=("accounts_survived", "mean"),
+            std_accounts=("accounts_survived", "std"),
+            avg_cost=("cost", "mean"),
+            std_cost=("cost", "std")
+        )
+    )
+
+    #--- PLOT 1: Average Net Profit by Year & Segment
+    plt.figure(figsize=(7, 5))
+    sns.lineplot(data=df_summary, x="year", y="avg_net_profit", hue="segment", marker='o')
+    plt.title("Average Net Profit by Year and Segment")
+    plt.ylabel("Avg Net Profit")
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+    #--- PLOT 2: Average Accounts by Year & Segment
+    plt.figure(figsize=(7, 5))
+    sns.lineplot(data=df_summary, x="year", y="avg_accounts", hue="segment", marker='o')
+    plt.title("Average Accounts Survived + New Originations by Year/Segment")
+    plt.ylabel("Avg Accounts")
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+    #--- PLOT 3: Distribution of Net Profit (box plot)
+    plt.figure(figsize=(8, 5))
+    sns.boxplot(data=df, x="year", y="net_profit", hue="segment")
+    plt.title("Net Profit Distribution by Year and Segment")
+    plt.ylabel("Net Profit")
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+    #--- PLOT 4: Average Cost by Year & Segment
+    plt.figure(figsize=(7, 5))
+    sns.lineplot(data=df_summary, x="year", y="avg_cost", hue="segment", marker='o')
+    plt.title("Average Cost by Year and Segment")
+    plt.ylabel("Avg Cost")
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+    #--- PLOT 5: Distribution of Cost (box plot)
+    plt.figure(figsize=(8, 5))
+    sns.boxplot(data=df, x="year", y="cost", hue="segment")
+    plt.title("Cost Distribution by Year and Segment")
+    plt.ylabel("Cost")
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+
+# -------------------------------------------------------------------
+# Example usage with 5-year simulation and visualizations
+# -------------------------------------------------------------------
+if __name__ == "__main__":
+    df_sim = simulate_montecarlo(
+        initial_new_accounts=10000,
+        annual_new_accounts=2000,
+        n_sims=200,   # reduce or increase as needed
+        n_years=5,
+        random_seed=42
+    )
+
+    print("Sample of simulation results:")
+    print(df_sim.head(10))
+
+    # Summarize total portfolio net profit by sim & year
+    df_portfolio = (
+        df_sim
+        .groupby(['sim', 'year'], as_index=False)['net_profit']
+        .sum()
+        .rename(columns={'net_profit': 'portfolio_net_profit'})
+    )
+    stats = df_portfolio.groupby('year')['portfolio_net_profit'].agg(['mean','std','min','max','median'])
+    print("\nPortfolio net profit by year (across sims):")
+    print(stats)
+
+    # Visualize segment-level performance (including cost)
+    visualize_performance_by_segment(df_sim)
